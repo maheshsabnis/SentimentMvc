@@ -1,0 +1,97 @@
+﻿@model SentimentMvc.Models.SentimentViewModel
+@{
+    ViewData["Title"] = "Sentiment Analysis";
+}
+
+<div class="container" style="max-width:800px">
+    <h2 class="mb-3">Sentiment Analysis</h2>
+    <form method="post">
+        <textarea name="text" class="form-control mb-3" rows="4" placeholder="Type a statement here...">@Model.Text</textarea>
+        <button type="submit" class="btn btn-primary">Analyze</button>
+    </form>
+
+    @if (Model.IsPositive.HasValue)
+    {
+        <div class="alert @(Model.IsPositive.Value ? "alert-success" : "alert-danger") mt-4 text-center">
+            <h1>@(Model.IsPositive.Value ? "Positive" : "Negative")</h1>
+            <div>Confidence: @Model.Probability.ToString("P1")</div>
+        </div>
+    }
+
+    @* Model status. The script below replaces only this block after a refresh,
+       so the text you typed and the result above are not lost. *@
+    <div id="modelStats">
+        @if (Model.Comparison != null)
+        {
+            var c = Model.Comparison;
+            <h5 class="mt-4">Model vs Baseline (trained on @Model.RowCount rows)</h5>
+            <table class="table table-sm">
+                <tr><th></th><th>Baseline (Prior)</th><th>SDCA Logistic Regression</th></tr>
+                <tr><td>Accuracy</td><td>@c.BaselineAccuracy.ToString("P1")</td><td>@c.ModelAccuracy.ToString("P1")</td></tr>
+                <tr><td>AUC</td><td>@c.BaselineAuc.ToString("F3")</td><td>@c.ModelAuc.ToString("F3")</td></tr>
+                <tr><td>F1</td><td>-</td><td>@c.ModelF1.ToString("F3")</td></tr>
+            </table>
+            <p>@(c.ModelBeatsBaseline ? "The model beats the baseline." : "The model does not beat the baseline.")</p>
+            <p class="text-muted">Last trained: @(Model.LastTrainedAt?.ToString("g") ?? "never")</p>
+        }
+    </div>
+
+    @* Refresh button with a countdown. Click it to re-learn from the database right away.
+       If you do not click, it refreshes by itself when the countdown reaches zero. *@
+    <button id="refreshBtn" type="button" class="btn btn-outline-secondary btn-sm">Refresh model now</button>
+    <span id="refreshInfo" class="text-muted ms-2"></span>
+</div>
+
+@section Scripts {
+    <script>
+        const AUTO_SECONDS = 120;   // auto refresh every 2 minutes
+        const btn = document.getElementById("refreshBtn");
+        const info = document.getElementById("refreshInfo");
+        let secondsLeft = AUTO_SECONDS;
+        let busy = false;
+
+        // m:ss text for the countdown
+        function fmt(s) { return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }
+
+        function showCountdown() {
+            info.textContent = "Auto refresh in " + fmt(secondsLeft);
+        }
+
+        // auto = true  : timer fired, server retrains only if the table changed (cheap)
+        // auto = false : user clicked, server always retrains
+        async function refreshModel(auto) {
+            if (busy) return;
+            busy = true;
+            btn.disabled = true;
+            info.textContent = "Refreshing model...";
+            try {
+                await fetch('@Url.Action("Retrain", "Home")?auto=' + auto, { method: "POST" });
+
+                // Reload the page in the background and copy only the model status block from it
+                const html = await (await fetch('@Url.Action("Index", "Home")')).text();
+                const doc = new DOMParser().parseFromString(html, "text/html");
+                document.getElementById("modelStats").innerHTML =
+                    doc.getElementById("modelStats").innerHTML;
+            } catch (e) {
+                info.textContent = "Refresh failed. Will try again.";
+            } finally {
+                busy = false;
+                btn.disabled = false;
+                secondsLeft = AUTO_SECONDS;   // restart the countdown after every refresh
+                showCountdown();
+            }
+        }
+
+        btn.addEventListener("click", () => refreshModel(false));
+
+        // Tick once per second
+        setInterval(() => {
+            if (busy) return;
+            secondsLeft--;
+            if (secondsLeft <= 0) refreshModel(true);
+            else showCountdown();
+        }, 1000);
+
+        showCountdown();
+    </script>
+}
